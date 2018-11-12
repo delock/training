@@ -1,0 +1,39 @@
+workspace(name = "mlperf_minigo")
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "io_bazel_rules_closure",
+    sha256 = "a38539c5b5c358548e75b44141b4ab637bba7c4dc02b46b1f62a96d6433f56ae",
+    strip_prefix = "rules_closure-dbb96841cc0a5fb2664c37822803b06dab20c7d1",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_closure/archive/dbb96841cc0a5fb2664c37822803b06dab20c7d1.tar.gz",
+        "https://github.com/bazelbuild/rules_closure/archive/dbb96841cc0a5fb2664c37822803b06dab20c7d1.tar.gz",  # 2018-04-13
+    ],
+)
+
+http_archive(
+    name = "org_tensorflow",
+    sha256 = "107638516b0224d3184253db21a8e938d3ee619eb1ee2667cae6890c9ab101d0",
+    strip_prefix = "tensorflow-1.12.0",
+    urls = ["https://github.com/tensorflow/tensorflow/archive/v1.12.0.zip"],
+)
+
+http_archive(
+    name = "minigo",
+    patches = ["//:minigo.patch"],
+    sha256 = "1fea682e15541c0b2c4b162a2120d3a8e9beb4fbf83bd876cc05e8409f3b3d61",
+    strip_prefix = "minigo-fda1487dff94a710e9359f80c28d08d99d6c3e3c",
+    urls = ["https://github.com/tensorflow/minigo/archive/fda1487dff94a710e9359f80c28d08d99d6c3e3c.zip"]
+)
+
+http_archive(
+    name = "leela",
+    build_file_content = """exports_files(["leela_0110_linux_x64"])""",
+    sha256 = "8c7d8c120ab8b940ded35c28f2a2d5b2b56448dbf9a9000f61c3de1da896c537",
+    urls = ["https://sjeng.org/dl/Leela0110GTP.zip"],
+)
+
+load("@minigo//:workspace.bzl", "minigo_workspace")
+
+minigo_workspace()
