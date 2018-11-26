@@ -322,7 +322,7 @@ index b7dcd35..ddc6892 100644
 +
 +    Coord GenMove() {
 +      std::ostringstream oss;
-+      oss << "kgs_genmove-cleanup " << color_;
++      oss << "kgs-genmove_cleanup " << color_;
 +      auto move = Coord::kInvalid;
 +      if (auto response = Send(oss.str())) {
 +        move = Coord::FromKgs(response.value(), true);
@@ -592,33 +592,6 @@ index 2c2fab6..0000000
 -         build_file = clean_dep("//third_party:com_google_absl.BUILD"),
 -     )
 -
-diff --git dual_net.py dual_net.py
-index 52a599b..3ad4670 100644
---- dual_net.py
-+++ dual_net.py
-@@ -33,6 +33,7 @@ import features as features_lib
- import go
- import preprocessing
- import symmetries
-+import uff
- 
- flags.DEFINE_integer('train_batch_size', 256,
-                      'Batch size to use for train/eval evaluation. For GPU '
-@@ -520,10 +521,13 @@ def export_model(model_path):
- 
- def freeze_graph(model_path):
-     n = DualNetwork(model_path)
-+    outputs = ["policy_output", "value_output"]
-     out_graph = tf.graph_util.convert_variables_to_constants(
--        n.sess, n.sess.graph.as_graph_def(), ["policy_output", "value_output"])
-+        n.sess, n.sess.graph.as_graph_def(), outputs)
-     with tf.gfile.GFile(model_path + '.pb', 'wb') as f:
-         f.write(out_graph.SerializeToString())
-+    with tf.gfile.GFile(model_path + '.uff', 'wb') as f:
-+        f.write(uff.from_tensorflow(out_graph, outputs))
- 
- 
- def freeze_graph_tpu(model_path):
 diff --git utils.py utils.py
 index 3b4efed..bb06c07 100644
 --- utils.py
@@ -629,3 +602,19 @@ index 3b4efed..bb06c07 100644
      tock = time.time()
 -    print("%s: %.3f seconds" % (message, (tock - tick)))
      logging.info("%s: %.3f seconds", message, (tock - tick))
+diff --git validate.py validate.py
+index ee3776a..213d71c 100644
+--- validate.py
++++ validate.py
+@@ -49,11 +49,11 @@ def validate(*tf_records):
+     if FLAGS.use_tpu:
+         def _input_fn(params):
+             return preprocessing.get_tpu_input_tensors(
+-                params['batch_size'], tf_records, filter_amount=0.05)
++                params['batch_size'], tf_records, filter_amount=1.0)
+     else:
+         def _input_fn():
+             return preprocessing.get_input_tensors(
+-                FLAGS.train_batch_size, tf_records, filter_amount=0.05,
++                FLAGS.train_batch_size, tf_records, filter_amount=1.0,
+                 shuffle_examples=False)

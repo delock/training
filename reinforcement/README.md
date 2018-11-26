@@ -40,7 +40,7 @@ To run the reinforcement benchmark in a Docker container, you can use these comm
     docker build -t reinforcement .
 
     # Run the benchmark inside docker
-    docker run --runtime=nvidia -v $(pwd)/results:/results reinforcement
+    docker run --runtime=nvidia -v $(pwd):/root reinforcement
 
 
 ### Steps to download and verify data
