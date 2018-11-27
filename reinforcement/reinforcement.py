@@ -14,14 +14,11 @@
 """Runs a reinforcement learning loop to train a Go playing model."""
 import logging
 import os
+import random
 import re
 import subprocess
 import sys
 import shutil
-
-import dual_net
-import evaluate
-import strategies
 import utils
 
 from absl import app, flags
@@ -30,10 +27,6 @@ from tensorflow import gfile
 from rl_loop import example_buffer
 from rl_loop import fsdb
 from rl_loop import shipname
-
-flags.adopt_module_key_flags(dual_net)
-flags.adopt_module_key_flags(evaluate)
-flags.adopt_module_key_flags(strategies)
 
 flags.DEFINE_string('engine', 'tf', 'Engine to use for inference.')
 
@@ -46,9 +39,9 @@ def checked_run(cmd, name):
     completed_process = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if completed_process.returncode:
-      logging.error("Error running %s: %s" %
-                    (name, completed_process.stdout.decode()))
-      raise RuntimeError("Non-zero return code executing %s" % " ".join(cmd))
+      logging.error('Error running %s: %s', name,
+                    completed_process.stdout.decode())
+      raise RuntimeError('Non-zero return code executing %s' % ' '.join(cmd))
   return completed_process
 
 
@@ -65,35 +58,41 @@ class MakeSlice(object):
 make_slice = MakeSlice()
 
 
-def cc_flags(model):
+def cc_flags(state):
   return [
       '--engine={}'.format(FLAGS.engine),
-      '--virtual_losses={}'.format(FLAGS.parallel_readouts),
-      '--num_readouts={}'.format(FLAGS.num_readouts),
-      '--seed={}'.format(model.model_num + 1),
+      '--virtual_losses=8',
+      '--seed={}'.format(state.iter_num + 1),
   ]
 
 
-def bootstrap(model):
+def py_flags(state):
+  return [
+      '--work_dir={}'.format(fsdb.working_dir()),
+      '--training_seed={}'.format(state.iter_num + 1),
+  ]
+
+
+# Generate an initial model with random weights.
+def bootstrap(state):
   checked_run([
       'python3', 'external/minigo/bootstrap.py', '--export_path={}'.format(
-          model.play_model_path), '--work_dir={}'.format(fsdb.working_dir())
-  ], 'bootstrap')
+          state.play_model_path)
+  ] + py_flags(state), 'bootstrap')
 
 
 # Self-play a number of games.
-def selfplay(model):
-  play_output_name = model.apply_model_num(model.play_model_name)
+def selfplay(state):
+  play_output_name = state.play_output_name
   play_output_dir = os.path.join(fsdb.selfplay_dir(), play_output_name)
   play_holdout_dir = os.path.join(fsdb.holdout_dir(), play_output_name)
 
-  num_selfplay_games = 2048
   result = checked_run([
-      'external/minigo/cc/main', '--mode=selfplay', '--parallel_games={}'
-      .format(num_selfplay_games), '--model={}'.format(model.play_model_path),
-      '--output_dir={}'.format(play_output_dir),
+      'external/minigo/cc/main', '--mode=selfplay', '--parallel_games=4096',
+      '--num_readouts=200', '--model={}'.format(
+          state.play_model_path), '--output_dir={}'.format(play_output_dir),
       '--holdout_dir={}'.format(play_holdout_dir)
-  ] + cc_flags(model), 'selfplay')
+  ] + cc_flags(state), 'selfplay')
   logging.info(get_lines(result, make_slice[-2:]))
 
   # Write examples to a single record.
@@ -105,134 +104,123 @@ def selfplay(model):
 
 
 # Train a new model.
-def train(model, tf_records):
+def train(state, tf_records):
   result = checked_run([
       'python3',
       'external/minigo/train.py',
       *tf_records,
-      '--value_cost_weight=1.0',  # TODO(csigg): what value?
-      '--work_dir={}'.format(fsdb.working_dir()),
-      '--export_path={}'.format(model.train_model_path),
-  ], 'training')
+      '--export_path={}'.format(state.train_model_path),
+  ] + py_flags(state), 'training')
   logging.info(get_lines(result, make_slice[-8:-8]))
 
 
 # Validate the trained model against holdout games.
-def validate(model):
-  result = checked_run([
-    'python3',
-    'external/minigo/validate.py',
-    os.path.join(fsdb.holdout_dir(), '%06d-*/*' % (model.model_num-1)),
-    '--work_dir={}'.format(fsdb.working_dir()),
-  ], 'validation')
-  logging.info(get_lines(result, make_slice[-3:-1]))
+def validate(state, holdout_dir):
+  result = checked_run(
+      ['python3', 'external/minigo/validate.py', holdout_dir] + py_flags(state),
+      'validation')
+  logging.info(get_lines(result, make_slice[-4:-3]))
 
 
 # Evaluate the trained model.
-def evaluate(model, opponent_arg, name, slice):
-  sgf_dir = os.path.join(fsdb.eval_dir(), model.train_model_name)
+def evaluate(state, args, name, slice):
+  sgf_dir = os.path.join(fsdb.eval_dir(), state.train_model_name)
   result = checked_run([
-      'external/minigo/cc/main', '--mode=eval',
-      '--parallel_games={}'.format(100), '--model={}'.format(
-          model.train_model_path), opponent_arg, '--sgf_dir={}'.format(sgf_dir)
-  ] + cc_flags(model), name)
+      'external/minigo/cc/main', '--mode=eval', '--parallel_games=100',
+      '--model={}'.format(
+          state.train_model_path), '--sgf_dir={}'.format(sgf_dir)
+  ] + args, name)
   result = get_lines(result, slice)
   logging.info(result)
-  pattern = '{}\s+\d+\s+(\d+\.\d+)%'.format(model.train_model_name)
+  pattern = '{}\s+\d+\s+(\d+\.\d+)%'.format(state.train_model_name)
   return float(re.search(pattern, result).group(1)) * 0.01
 
 
 # Evaluate trained model against previous best.
-def evaluate_model(model):
-  model_win_rate = evaluate(model, '--model_two={}'.format(
-      model.play_model_path), 'model evaluation', make_slice[-7:])
-  logging.info('Win rate %s vs %s: %.3f', model.train_model_name,
-               model.play_model_name, model_win_rate)
+def evaluate_model(state):
+  model_win_rate = evaluate(
+      state,
+      ['--num_readouts=200', '--model_two={}'.format(state.play_model_path)
+      ] + cc_flags(state), 'model evaluation', make_slice[-7:])
+  logging.info('Win rate %s vs %s: %.3f', state.train_model_name,
+               state.play_model_name, model_win_rate)
   return model_win_rate
 
 
-# Evaluate trained model against other Go program.
-def evaluate_target(model):
+# Evaluate trained model against Leela.
+def evaluate_target(state):
   leela_cmd = 'external/leela/leela_0110_linux_x64 ' \
               '--gtp --quiet --playouts=2000 --noponder'
-  # gnugo_cmd = '/usr/games/gnugo --mode gtp --chinese-rules --level 10'
-  target_win_rate = evaluate(model, '--gtp_client={}'.format(leela_cmd),
-                             'target evaluation', make_slice[-6:])
-  logging.info('Win rate  %s vs Leela: %.3f', model.train_model_name,
+  target_win_rate = evaluate(
+      state, ['--num_readouts=800', '--gtp_client={}'.format(leela_cmd)
+             ] + cc_flags(state), 'target evaluation', make_slice[-6:])
+  logging.info('Win rate  %s vs Leela: %.3f', state.train_model_name,
                target_win_rate)
   return target_win_rate
 
 
-# Play puzzles with the trained model.
-def puzzle(model):
-  result = checked_run([
-      'external/minigo/cc/main', '--mode=puzzle', '--model={}'.format(
-          model.train_model_path), '--sgf_dir={}'.format('puzzles/')
-  ] + cc_flags(model), 'puzzle')
-  result = get_lines(result, make_slice[-2:])
-  logging.info(result)
-  pattern = 'Solved \d+ of \d+ puzzles \((\d+\.\d+)%\)'
-  puzzle_prediction_rate = float(re.search(pattern, result).group(1)) * 0.01
-  logging.info('Prediction rate of puzzles: %.3f', puzzle_prediction_rate)
+class State:
 
-
-class RlLoop(object):
+  _NAMES = ['bootstrap'] + random.Random(0).sample(shipname.NAMES,
+                                                   len(shipname.NAMES))
 
   def __init__(self):
-    self.model_num = 0
-    self.model_win_rate = 0.0
-    self.play_model_name = shipname.generate(0)
-    self.train_model_name = shipname.generate(1)
+    self.iter_num = 0
+    self.play_model_num = 0
+    self.play_model_name = self.play_output_name
+    self.train_model_num = 1
 
-    bootstrap(self)
-    selfplay(self)
-
-  def __iter__(self):
-    return self
-
-  def __next__(self):
-    self.model_num = self.model_num + 1
-
-    if self.model_win_rate >= 0.55:
-      # Promote the trained model to the play model.
-      self.play_model_name = self.train_model_name
-      self.train_model_name = shipname.generate(self.model_num)
-    else:
-      # The trained model is not significantly better. Generate more
-      # games with the same play model and train a new candidate.
-      self.train_model_name = self.apply_model_num(self.train_model_name)
-
-    # Train on shuffled game data of the last 10 selfplay rounds.
-    tf_records = os.path.join(fsdb.golden_chunk_dir(), '*.zz')
-    tf_records = sorted(gfile.Glob(tf_records), reverse=True)[:5]
-    train(self, tf_records)
-
-    # These could all run in parallel.
-    validate(self)
-    self.model_win_rate = evaluate_model(self)
-    target_win_rate = evaluate_target(self)
-    puzzle(self)
-
-    # This could run in parallel to the rest.
-    selfplay(self)
-
-    # Bury the selfplay games if they produced a significantly worse model.
-    if self.model_win_rate < 0.4:
-      logging.info('Burying %s.', tf_records[0])
-      shutil.move(tf_records[0], tf_records[0] + '.bury')
-
-    return self.model_num, target_win_rate
+  @property
+  def play_output_name(self):
+    return '%06d-%s' % (self.iter_num, self._NAMES[self.play_model_num])
 
   @property
   def play_model_path(self):
     return os.path.join(fsdb.models_dir(), self.play_model_name)
 
   @property
+  def train_model_name(self):
+    return '%06d-%s' % (self.iter_num, self._NAMES[self.train_model_num])
+
+  @property
   def train_model_path(self):
     return os.path.join(fsdb.models_dir(), self.train_model_name)
 
-  def apply_model_num(self, name):
-    return '%06d%s' % (self.model_num, name[6:])
+
+def rl_loop():
+  state = State()
+  bootstrap(state)
+  selfplay(state)
+
+  while state.iter_num < 100:
+    holdout_dir = os.path.join(fsdb.holdout_dir(), '%06d-*/*' % state.iter_num)
+    tf_records = os.path.join(fsdb.golden_chunk_dir(), '*.zz')
+    tf_records = sorted(gfile.Glob(tf_records), reverse=True)[:5]
+
+    state.iter_num += 1
+
+    # Train on shuffled game data of the last 5 selfplay rounds.
+    train(state, tf_records)
+
+    # These could run in parallel.
+    validate(state, holdout_dir)
+    model_win_rate = evaluate_model(state)
+    target_win_rate = evaluate_target(state)
+
+    # This could run in parallel to the rest.
+    selfplay(state)
+
+    if model_win_rate >= 0.55:
+      # Promote the trained model to the play model.
+      state.play_model_num = state.train_model_num
+      state.play_model_name = state.train_model_name
+      state.train_model_num += 1
+    elif model_win_rate < 0.4:
+      # Bury the selfplay games which produced a significantly worse model.
+      logging.info('Burying %s.', tf_records[0])
+      shutil.move(tf_records[0], tf_records[0] + '.bury')
+
+    yield target_win_rate
 
 
 def main(unused_argv):
@@ -255,14 +243,13 @@ def main(unused_argv):
   for handler in logging.getLogger().handlers:
     handler.setFormatter(formatter)
 
-  for model_num, target_win_rate in RlLoop():
-    if target_win_rate >= 42:  # TODO(csigg): Choose exit criteria
-      return logging.info('Done')
-    if model_num >= 100:
-      return logging.info('Failed to converge')
+  with utils.logged_timer('Total time'):
+    for target_win_rate in rl_loop():
+      if target_win_rate > 0.5:
+        return logging.info('Passed exit criteria.')
+    logging.info('Failed to converge.')
 
 
 if __name__ == '__main__':
   sys.path.insert(0, '.')
-  with utils.logged_timer('Total time'):
-    app.run(main)
+  app.run(main)
