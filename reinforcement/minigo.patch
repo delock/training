@@ -1,3 +1,6 @@
+Generated with:
+git diff --no-prefix fda1487dff94a710e9359f80c28d08d99d6c3e3c \
+  > ~/github/mlperf/training/reinforcement/minigo.patch
 diff --git BUILD BUILD
 index e69de29..e30b211 100644
 --- BUILD
@@ -39,7 +42,7 @@ index 1a66b00..a81cdc6 100644
  
  load("//:workspace.bzl", "minigo_workspace")
 diff --git cc/main.cc cc/main.cc
-index b7dcd35..ddc6892 100644
+index b7dcd35..35f3400 100644
 --- cc/main.cc
 +++ cc/main.cc
 @@ -13,7 +13,10 @@
@@ -72,7 +75,28 @@ index b7dcd35..ddc6892 100644
  DEFINE_int32(parallel_games, 32, "Number of games to play in parallel.");
  
  // Output flags.
-@@ -188,12 +197,13 @@ std::string FormatInferenceInfo(
+@@ -162,18 +171,11 @@ std::unique_ptr<DualNetFactory> NewDualNetFactory(const std::string& model_path,
+ }
+ 
+ std::string GetOutputName(absl::Time now, size_t i) {
+-  auto timestamp = absl::ToUnixSeconds(now);
+-  std::string output_name;
+-  char hostname[64];
+-  if (gethostname(hostname, sizeof(hostname)) != 0) {
+-    std::strncpy(hostname, "unknown", sizeof(hostname));
+-  }
+-  return absl::StrCat(timestamp, "-", hostname, "-", i);
++  return absl::StrFormat("%06d-%s", i, FLAGS_mode);
+ }
+ 
+ std::string GetOutputDir(absl::Time now, const std::string& root_dir) {
+-  auto sub_dirs = absl::FormatTime("%Y-%m-%d-%H", now, absl::UTCTimeZone());
+-  return file::JoinPath(root_dir, sub_dirs);
++  return root_dir;
+ }
+ 
+ std::string FormatInferenceInfo(
+@@ -188,12 +190,13 @@ std::string FormatInferenceInfo(
  }
  
  void WriteSgf(const std::string& output_dir, const std::string& output_name,
@@ -88,7 +112,7 @@ index b7dcd35..ddc6892 100644
  
    std::vector<sgf::MoveWithComment> moves;
    moves.reserve(player_b.history().size());
-@@ -209,8 +219,7 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
+@@ -209,8 +212,7 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
              h.comment);
        } else {
          if (log_names) {
@@ -98,7 +122,7 @@ index b7dcd35..ddc6892 100644
          } else {
            comment = h.comment;
          }
-@@ -221,12 +230,11 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
+@@ -221,12 +223,11 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
      }
    }
  
@@ -113,7 +137,7 @@ index b7dcd35..ddc6892 100644
    options.game_comment = absl::StrCat(
        "B inferences: ", FormatInferenceInfo(player_b.inferences()), "\n",
        "W inferences: ", FormatInferenceInfo(player_w.inferences()));
-@@ -237,11 +245,52 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
+@@ -237,11 +238,52 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
    MG_CHECK(file::WriteFile(output_path, sgf_str));
  }
  
@@ -166,7 +190,7 @@ index b7dcd35..ddc6892 100644
  void ParseMctsPlayerOptionsFromFlags(MctsPlayer::Options* options) {
    options->inject_noise = FLAGS_inject_noise;
    options->soft_pick = FLAGS_soft_pick;
-@@ -480,7 +529,7 @@ class SelfPlayer {
+@@ -480,7 +522,7 @@ class SelfPlayer {
    uint64_t flags_timestamp_ = 0;
  };
  
@@ -175,7 +199,7 @@ index b7dcd35..ddc6892 100644
    // A barrier that blocks threads until the number of waiting threads reaches
    // the 'count' threshold. This implementation has different semantics than
    // absl::Barrier: it can be reused and allows decrementing the threshold to
-@@ -543,14 +592,10 @@ class Evaluator {
+@@ -543,14 +585,10 @@ class Evaluator {
  
    struct Model {
      Model(const std::string& model_path)
@@ -193,7 +217,7 @@ index b7dcd35..ddc6892 100644
    };
  
   public:
-@@ -575,9 +620,9 @@ class Evaluator {
+@@ -575,9 +613,9 @@ class Evaluator {
  
      for (int thread_id = 0; thread_id < num_games; ++thread_id) {
        bool swap_models = (thread_id & 1) != 0;
@@ -206,7 +230,7 @@ index b7dcd35..ddc6892 100644
      }
  
      for (auto& t : threads_) {
-@@ -588,29 +633,7 @@ class Evaluator {
+@@ -588,29 +626,7 @@ class Evaluator {
                << absl::ToDoubleSeconds(absl::Now() - start_time) << " sec."
                << std::endl;
  
@@ -237,7 +261,7 @@ index b7dcd35..ddc6892 100644
    }
  
   private:
-@@ -635,12 +658,12 @@ class Evaluator {
+@@ -635,12 +651,12 @@ class Evaluator {
      }
  
      player_options.verbose = thread_id == 0;
@@ -252,7 +276,7 @@ index b7dcd35..ddc6892 100644
      auto other_player = absl::make_unique<MctsPlayer>(
          absl::make_unique<WrappedDualNet>(&dual_net), player_options);
  
-@@ -679,10 +702,10 @@ class Evaluator {
+@@ -679,10 +695,10 @@ class Evaluator {
  
      MG_CHECK(player->result() == other_player->result());
      if (player->result() > 0) {
@@ -265,7 +289,7 @@ index b7dcd35..ddc6892 100644
      }
  
      if (black->options().verbose) {
-@@ -706,14 +729,235 @@ class Evaluator {
+@@ -706,14 +722,235 @@ class Evaluator {
    std::vector<std::thread> threads_;
  };
  
@@ -592,6 +616,53 @@ index 2c2fab6..0000000
 -         build_file = clean_dep("//third_party:com_google_absl.BUILD"),
 -     )
 -
+diff --git dual_net.py dual_net.py
+index 52a599b..fa04136 100644
+--- dual_net.py
++++ dual_net.py
+@@ -22,6 +22,8 @@ from absl import flags
+ import functools
+ import logging
+ import os.path
++import numpy
++import random
+ 
+ import tensorflow as tf
+ from tensorflow.contrib import summary
+@@ -124,6 +126,9 @@ flags.register_multi_flags_validator(
+                    flags['summary_steps'] % flags['iterations_per_loop'] == 0),
+     'If use_tpu, summary_steps must be a multiple of iterations_per_loop')
+ 
++flags.DEFINE_integer('training_seed', 0,
++                     'Random seed to use for training and validation')
++
+ FLAGS = flags.FLAGS
+ 
+ 
+@@ -431,7 +436,15 @@ def const_model_inference_fn(features):
+         return model_inference_fn(features, False, FLAGS.flag_values_dict())
+ 
+ 
++def set_seed():
++    if FLAGS.training_seed != 0:
++        random.seed(FLAGS.training_seed)
++        tf.set_random_seed(FLAGS.training_seed)
++        numpy.random.seed(FLAGS.training_seed)
++
++
+ def get_estimator():
++    set_seed()
+     if FLAGS.use_tpu:
+         return _get_tpu_estimator()
+     else:
+@@ -485,6 +498,7 @@ def bootstrap():
+     # Estimator will do this automatically when you call train(), but calling
+     # train() requires data, and I didn't feel like creating training data in
+     # order to run the full train pipeline for 1 step.
++    set_seed()
+     initial_checkpoint_name = 'model.ckpt-1'
+     save_file = os.path.join(FLAGS.work_dir, initial_checkpoint_name)
+     sess = tf.Session(graph=tf.Graph())
 diff --git utils.py utils.py
 index 3b4efed..bb06c07 100644
 --- utils.py
@@ -603,10 +674,10 @@ index 3b4efed..bb06c07 100644
 -    print("%s: %.3f seconds" % (message, (tock - tick)))
      logging.info("%s: %.3f seconds", message, (tock - tick))
 diff --git validate.py validate.py
-index ee3776a..213d71c 100644
+index ee3776a..0980500 100644
 --- validate.py
 +++ validate.py
-@@ -49,21 +49,16 @@ def validate(*tf_records):
+@@ -49,17 +49,15 @@ def validate(*tf_records):
      if FLAGS.use_tpu:
          def _input_fn(params):
              return preprocessing.get_tpu_input_tensors(
@@ -619,49 +690,11 @@ index ee3776a..213d71c 100644
 +                FLAGS.train_batch_size, tf_records, filter_amount=1.0,
                  shuffle_examples=False)
  
--
+ 
 -    steps = FLAGS.examples_to_validate / FLAGS.train_batch_size
 -    if FLAGS.use_tpu:
 -        steps /= FLAGS.num_tpu_cores
--
++    steps = None
+ 
      estimator = dual_net.get_estimator()
      with utils.logged_timer("Validating"):
--        estimator.evaluate(_input_fn, steps=steps, name=FLAGS.validate_name)
-+        estimator.evaluate(_input_fn, name=FLAGS.validate_name)
- 
- 
- def main(argv):
-
---- dual_net.py	(date 1542636281000)
-+++ dual_net.py	(date 1543305361000)
-@@ -22,6 +22,8 @@
- import functools
- import logging
- import os.path
-+import numpy
-+import random
-
- import tensorflow as tf
- from tensorflow.contrib import summary
-@@ -125,6 +127,9 @@
-                    flags['summary_steps'] % flags['iterations_per_loop'] == 0),
-     'If use_tpu, summary_steps must be a multiple of iterations_per_loop')
-
-+flags.DEFINE_integer('training_seed', 0,
-+                     'Random seed to use for training and validation')
-+
- FLAGS = flags.FLAGS
-
-
-@@ -433,6 +438,11 @@
-
-
- def get_estimator():
-+    if FLAGS.training_seed != 0:
-+        random.seed(FLAGS.training_seed)
-+        tf.set_random_seed(FLAGS.training_seed)
-+        numpy.random.seed(FLAGS.training_seed)
-+
-     if FLAGS.use_tpu:
-         return _get_tpu_estimator()
-     else:

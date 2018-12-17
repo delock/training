@@ -14,19 +14,17 @@
 """Runs a reinforcement learning loop to train a Go playing model."""
 import logging
 import os
+import numpy
 import random
 import re
 import subprocess
 import sys
 import shutil
+import tensorflow
 import utils
 
 from absl import app, flags
-from tensorflow import gfile
-
-from rl_loop import example_buffer
-from rl_loop import fsdb
-from rl_loop import shipname
+from rl_loop import example_buffer, fsdb, shipname
 
 flags.DEFINE_string('engine', 'tf', 'Engine to use for inference.')
 
@@ -62,14 +60,14 @@ def cc_flags(state):
   return [
       '--engine={}'.format(FLAGS.engine),
       '--virtual_losses=8',
-      '--seed={}'.format(state.iter_num + 1),
+      '--seed={}'.format(state.seed),
   ]
 
 
 def py_flags(state):
   return [
       '--work_dir={}'.format(fsdb.working_dir()),
-      '--training_seed={}'.format(state.iter_num + 1),
+      '--training_seed={}'.format(state.seed),
   ]
 
 
@@ -88,8 +86,8 @@ def selfplay(state):
   play_holdout_dir = os.path.join(fsdb.holdout_dir(), play_output_name)
 
   result = checked_run([
-      'external/minigo/cc/main', '--mode=selfplay', '--parallel_games=4096',
-      '--num_readouts=200', '--model={}'.format(
+      'external/minigo/cc/main', '--mode=selfplay', '--parallel_games=2048',
+      '--num_readouts=100', '--model={}'.format(
           state.play_model_path), '--output_dir={}'.format(play_output_dir),
       '--holdout_dir={}'.format(play_holdout_dir)
   ] + cc_flags(state), 'selfplay')
@@ -97,8 +95,12 @@ def selfplay(state):
 
   # Write examples to a single record.
   logging.info('Extracting examples')
+  random.seed(state.seed)
+  tensorflow.set_random_seed(state.seed)
+  numpy.random.seed(state.seed)
   buffer = example_buffer.ExampleBuffer(sampling_frac=1.0)
-  buffer.parallel_fill(gfile.Glob(os.path.join(play_output_dir, '*/*.zz')))
+  buffer.parallel_fill(
+      tensorflow.gfile.Glob(os.path.join(play_output_dir, '*.zz')))
   buffer.flush(
       os.path.join(fsdb.golden_chunk_dir(), play_output_name + '.tfrecord.zz'))
 
@@ -140,7 +142,7 @@ def evaluate(state, args, name, slice):
 def evaluate_model(state):
   model_win_rate = evaluate(
       state,
-      ['--num_readouts=200', '--model_two={}'.format(state.play_model_path)
+      ['--num_readouts=100', '--model_two={}'.format(state.play_model_path)
       ] + cc_flags(state), 'model evaluation', make_slice[-7:])
   logging.info('Win rate %s vs %s: %.3f', state.train_model_name,
                state.play_model_name, model_win_rate)
@@ -152,7 +154,7 @@ def evaluate_target(state):
   leela_cmd = 'external/leela/leela_0110_linux_x64 ' \
               '--gtp --quiet --playouts=2000 --noponder'
   target_win_rate = evaluate(
-      state, ['--num_readouts=800', '--gtp_client={}'.format(leela_cmd)
+      state, ['--num_readouts=400', '--gtp_client={}'.format(leela_cmd)
              ] + cc_flags(state), 'target evaluation', make_slice[-6:])
   logging.info('Win rate  %s vs Leela: %.3f', state.train_model_name,
                target_win_rate)
@@ -186,6 +188,10 @@ class State:
   def train_model_path(self):
     return os.path.join(fsdb.models_dir(), self.train_model_name)
 
+  @property
+  def seed(self):
+    return self.iter_num + 1
+
 
 def rl_loop():
   state = State()
@@ -193,9 +199,9 @@ def rl_loop():
   selfplay(state)
 
   while state.iter_num < 100:
-    holdout_dir = os.path.join(fsdb.holdout_dir(), '%06d-*/*' % state.iter_num)
+    holdout_dir = os.path.join(fsdb.holdout_dir(), '%06d-*' % state.iter_num)
     tf_records = os.path.join(fsdb.golden_chunk_dir(), '*.zz')
-    tf_records = sorted(gfile.Glob(tf_records), reverse=True)[:5]
+    tf_records = sorted(tensorflow.gfile.Glob(tf_records), reverse=True)[:5]
 
     state.iter_num += 1
 

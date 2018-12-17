@@ -26,6 +26,10 @@ http_archive(
     strip_prefix = "minigo-fda1487dff94a710e9359f80c28d08d99d6c3e3c",
     urls = ["https://github.com/tensorflow/minigo/archive/fda1487dff94a710e9359f80c28d08d99d6c3e3c.zip"]
 )
+#local_repository(
+#    name = "minigo",
+#    path = "../../../tensorflow/minigo",
+#)
 
 http_archive(
     name = "leela",
