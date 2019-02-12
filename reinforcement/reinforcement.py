@@ -22,6 +22,8 @@ import sys
 import shutil
 import tensorflow
 import utils
+import multiprocessing
+import fcntl
 
 from absl import app, flags
 from rl_loop import example_buffer, fsdb, shipname
@@ -31,20 +33,110 @@ flags.DEFINE_string('engine', 'tf', 'Engine to use for inference.')
 FLAGS = flags.FLAGS
 
 
-def checked_run(cmd, name):
-  logging.info('Running %s:\n  %s', name, '\n  '.join(cmd))
+# num_instance: number of instances totally launched
+#               if num_instance == 0, go through the simple path with out any
+#                   core affinity control
+#               if num_instance >  0, go through the multi-instance path with
+#                   core affinity control
+# num_parallel_instance: number of instances running in parallel
+# cores_per_instance: number of cores for one instance
+def checked_run(cmd, name, num_instance=0, num_parallel_instance=None,
+                cores_per_instance=1):
+  if (num_instance == 0):
+    logging.info('Running %s:\n  %s', name, '\n  '.join(cmd))
+  else:
+    logging.info('Running %s*%d:\n  %s', name, num_instance, '\n  '.join(cmd))
   with utils.logged_timer('%s finished' % name.capitalize()):
-    completed_process = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    if completed_process.returncode:
-      logging.error('Error running %s: %s', name,
-                    completed_process.stdout.decode())
-      raise RuntimeError('Non-zero return code executing %s' % ' '.join(cmd))
-  return completed_process
+    if num_instance == 0:
+      try:
+        cmd = ' '.join(cmd)
+        completed_output = subprocess.check_output(
+          cmd, shell=True, stderr=subprocess.STDOUT)
+      except subprocess.CalledProcessError as err:
+        logging.error('Error running %s: %s', name, err.output.decode())
+        raise RuntimeError('Non-zero return code executing %s' % ' '.join(cmd))
+      return completed_output
+    else:
+      if num_parallel_instance == None:
+            num_parallel_instance = int(multiprocessing.cpu_count())
+      procs=[None]*num_parallel_instance
+      results = [""]*num_parallel_instance
+      lines = [""]*num_parallel_instance
+      result=""
+
+      cur_instance = 0
+      # add new proc into procs
+      while cur_instance < num_instance or not all (
+          proc is None for proc in procs):
+        if None in procs and cur_instance < num_instance:
+          index = procs.index(None)
+          subproc_cmd = [
+                  'OMP_NUM_THREADS={}'.format(cores_per_instance),
+                  'KMP_HW_SUBSET={}'.format(os.environ['KMP_HW_SUBSET']),
+                  'KMP_AFFINITY=granularity=fine,proclist=[{}],explicit'.format(
+                      ','.join(str(i) for i in list(range(
+                          index, index+cores_per_instance
+                          ))))]
+          subproc_cmd = subproc_cmd + cmd
+          subproc_cmd = ' '.join(subproc_cmd)
+          subproc_cmd = subproc_cmd.format(cur_instance)
+          if (cur_instance == 0):
+            print("subproc_cmd = {}".format(subproc_cmd))
+          procs[index] = subprocess.Popen(subproc_cmd, shell=True,
+                                          stdout=subprocess.PIPE,
+                                          stderr=subprocess.STDOUT)
+
+          proc_count = 0
+          for i in range(num_parallel_instance):
+            if procs[i] != None:
+              proc_count += 1
+          print ('started instance {} in proc {}. proc count = {}'.format(
+              cur_instance, index, proc_count))
+          sys.stdout.flush()
+
+          # change stdout of the process to non-blocking
+          # this is for collect output in a single thread
+          flags = fcntl.fcntl(procs[index].stdout, fcntl.F_GETFL)
+          fcntl.fcntl(procs[index].stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+          cur_instance += 1
+        for index in range(num_parallel_instance):
+          if procs[index] != None:
+            # collect proc output
+            while True:
+              try:
+                line = procs[index].stdout.readline()
+                if line == b'':
+                  break
+                results[index] = results[index] + line.decode()
+              except IOError:
+                break
+
+            ret_val = procs[index].poll()
+            if ret_val == None:
+              continue
+            elif ret_val != 0:
+              print (results[index])
+              raise RuntimeError(
+                'Non-zero return code (%d) executing %s' % (
+                    ret_val, subproc_cmd))
+
+            result += results[index]
+            results[index] = ""
+            procs[index] = None
+
+            proc_count = 0
+            for i in range(num_parallel_instance):
+              if procs[i] != None:
+                proc_count += 1
+            print ('proc {} finished. proc count = {}'.format(
+                index, proc_count))
+            sys.stdout.flush()
+      return result.encode('utf-8')
 
 
-def get_lines(completed_process, slice):
-  return '\n'.join(completed_process.stdout.decode()[:-1].split('\n')[slice])
+def get_lines(completed_output, slice):
+  return '\n'.join(completed_output.decode()[:-1].split('\n')[slice])
 
 
 class MakeSlice(object):
@@ -80,17 +172,28 @@ def bootstrap(state):
 
 
 # Self-play a number of games.
-def selfplay(state):
+def selfplay(state, parallel_games=2048, total_games=2048, num_parallel_instance=None):
   play_output_name = state.play_output_name
   play_output_dir = os.path.join(fsdb.selfplay_dir(), play_output_name)
   play_holdout_dir = os.path.join(fsdb.holdout_dir(), play_output_name)
 
-  result = checked_run([
-      'external/minigo/cc/main', '--mode=selfplay', '--parallel_games=2048',
-      '--num_readouts=100', '--model={}'.format(
-          state.play_model_path), '--output_dir={}'.format(play_output_dir),
-      '--holdout_dir={}'.format(play_holdout_dir)
-  ] + cc_flags(state), 'selfplay')
+  if (parallel_games == total_games):
+    result = checked_run([
+        'external/minigo/cc/main', '--mode=selfplay',
+        '--parallel_games={}'.format(parallel_games),
+        '--num_readouts=100', '--model={}'.format(
+            state.play_model_path), '--output_dir={}'.format(play_output_dir),
+        '--holdout_dir={}'.format(play_holdout_dir)
+    ] + cc_flags(state), 'selfplay')
+  else:
+    result = checked_run([
+        'external/minigo/cc/main', '--mode=selfplay',
+        '--parallel_games={}'.format(parallel_games),
+        '--instance_id={}',
+        '--num_readouts=100', '--model={}'.format(
+            state.play_model_path), '--output_dir={}'.format(play_output_dir),
+        '--holdout_dir={}'.format(play_holdout_dir)
+    ] + cc_flags(state), 'selfplay',  total_games/parallel_games, num_parallel_instance)
   logging.info(get_lines(result, make_slice[-2:]))
 
   # Write examples to a single record.
@@ -110,7 +213,7 @@ def train(state, tf_records):
   result = checked_run([
       'python3',
       'external/minigo/train.py',
-      *tf_records,
+      ] + tf_records + [
       '--export_path={}'.format(state.train_model_path),
   ] + py_flags(state), 'training')
   logging.info(get_lines(result, make_slice[-8:-8]))
@@ -132,10 +235,14 @@ def evaluate(state, args, name, slice):
       '--model={}'.format(
           state.train_model_path), '--sgf_dir={}'.format(sgf_dir)
   ] + args, name)
-  result = get_lines(result, slice)
+  result = result.decode()
   logging.info(result)
-  pattern = '{}\s+\d+\s+(\d+\.\d+)%'.format(state.train_model_name)
-  return float(re.search(pattern, result).group(1)) * 0.01
+  pattern = '{}\s+(\d+)\s+\d+\.\d+%'.format(state.train_model_name)
+  matches = re.findall(pattern, result)
+  total = 0.0
+  for i in range(len(matches)):
+    total += float(matches[i])
+  return total * 0.01
 
 
 # Evaluate trained model against previous best.
@@ -151,8 +258,8 @@ def evaluate_model(state):
 
 # Evaluate trained model against Leela.
 def evaluate_target(state):
-  leela_cmd = 'external/leela/leela_0110_linux_x64 ' \
-              '--gtp --quiet --playouts=2000 --noponder'
+  leela_cmd = '"external/leela/leela_0110_linux_x64 ' \
+              '--gtp --quiet --playouts=2000 --noponder"'
   target_win_rate = evaluate(
       state, ['--num_readouts=400', '--gtp_client={}'.format(leela_cmd)
              ] + cc_flags(state), 'target evaluation', make_slice[-6:])

@@ -21,7 +21,7 @@ http_archive(
 
 http_archive(
     name = "minigo",
-    patches = ["//:minigo.patch"],
+    patches = ["//:minigo.patch", "//:multi-instance.patch"],
     sha256 = "1fea682e15541c0b2c4b162a2120d3a8e9beb4fbf83bd876cc05e8409f3b3d61",
     strip_prefix = "minigo-fda1487dff94a710e9359f80c28d08d99d6c3e3c",
     urls = ["https://github.com/tensorflow/minigo/archive/fda1487dff94a710e9359f80c28d08d99d6c3e3c.zip"]
