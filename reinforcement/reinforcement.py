@@ -29,7 +29,7 @@ from absl import app, flags
 from rl_loop import example_buffer, fsdb, shipname
 
 flags.DEFINE_string('engine', 'tf', 'Engine to use for inference.')
-flags.DEFINE_string('device', 'gpu', 'Engine to use for inference.')
+flags.DEFINE_string('device', 'gpu', 'Device to use for inference.')
 
 FLAGS = flags.FLAGS
 
