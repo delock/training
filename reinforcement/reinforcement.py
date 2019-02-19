@@ -29,6 +29,7 @@ from absl import app, flags
 from rl_loop import example_buffer, fsdb, shipname
 
 flags.DEFINE_string('engine', 'tf', 'Engine to use for inference.')
+flags.DEFINE_string('device', 'gpu', 'Engine to use for inference.')
 
 FLAGS = flags.FLAGS
 
@@ -50,6 +51,22 @@ def checked_run(cmd, name, num_instance=0, num_parallel_instance=None,
     if num_instance == 0:
       try:
         cmd = ' '.join(cmd)
+        completed_output = subprocess.check_output(
+          cmd, shell=True, stderr=subprocess.STDOUT)
+      except subprocess.CalledProcessError as err:
+        logging.error('Error running %s: %s', name, err.output.decode())
+        raise RuntimeError('Non-zero return code executing %s' % ' '.join(cmd))
+      return completed_output
+    elif num_instance == 1:
+      if cores_per_instance != None:
+        omp_string = 'OMP_NUM_THREADSD={}'.format(cores_per_instance)
+      else:
+        omp_string = ''
+      prefix =' '.join([
+          omp_string,
+          'KMP_AFFINITY=compact,granularity=fine,1,0'])
+      try:
+        cmd = prefix + ' '  + ' '.join(cmd)
         completed_output = subprocess.check_output(
           cmd, shell=True, stderr=subprocess.STDOUT)
       except subprocess.CalledProcessError as err:
@@ -173,6 +190,8 @@ def bootstrap(state):
 
 # Self-play a number of games.
 def selfplay(state, parallel_games=2048, total_games=2048, num_parallel_instance=None):
+  if FLAGS.device == 'cpu':
+    parallel_games = 4
   play_output_name = state.play_output_name
   play_output_dir = os.path.join(fsdb.selfplay_dir(), play_output_name)
   play_holdout_dir = os.path.join(fsdb.holdout_dir(), play_output_name)
@@ -210,12 +229,20 @@ def selfplay(state, parallel_games=2048, total_games=2048, num_parallel_instance
 
 # Train a new model.
 def train(state, tf_records):
-  result = checked_run([
-      'python3',
-      'external/minigo/train.py',
-      ] + tf_records + [
-      '--export_path={}'.format(state.train_model_path),
-  ] + py_flags(state), 'training')
+  if FLAGS.device == 'cpu':
+    result = checked_run([
+        'python3',
+        'external/minigo/train.py',
+        ] + tf_records + [
+        '--export_path={}'.format(state.train_model_path),
+    ] + py_flags(state), 'training', 1, 1, None)
+  else:
+    result = checked_run([
+        'python3',
+        'external/minigo/train.py',
+        ] + tf_records + [
+        '--export_path={}'.format(state.train_model_path),
+    ] + py_flags(state), 'training')
   logging.info(get_lines(result, make_slice[-8:-8]))
 
 
@@ -230,11 +257,20 @@ def validate(state, holdout_dir):
 # Evaluate the trained model.
 def evaluate(state, args, name, slice):
   sgf_dir = os.path.join(fsdb.eval_dir(), state.train_model_name)
-  result = checked_run([
-      'external/minigo/cc/main', '--mode=eval', '--parallel_games=100',
-      '--model={}'.format(
-          state.train_model_path), '--sgf_dir={}'.format(sgf_dir)
-  ] + args, name)
+  if FLAGS.device == 'cpu':
+    result = checked_run([
+        'external/minigo/cc/main', '--mode=eval', '--parallel_games=2',
+        '--instance_id={}',
+        '--model={}'.format(
+            state.train_model_path), '--sgf_dir={}'.format(sgf_dir)
+    ] + args, name, num_instance=50)
+  else:
+    result = checked_run([
+        'external/minigo/cc/main', '--mode=eval', '--parallel_games=100',
+        '--model={}'.format(
+            state.train_model_path), '--sgf_dir={}'.format(sgf_dir)
+    ] + args, name)
+
   result = result.decode()
   logging.info(result)
   pattern = '{}\s+(\d+)\s+\d+\.\d+%'.format(state.train_model_name)
