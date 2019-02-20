@@ -149,8 +149,19 @@ def evaluate_model(state):
   return model_win_rate
 
 
+# Evaluate trained model against reference minigo model.
+def evaluate_target_minigo(state):
+  target_win_rate = evaluate(
+      state,
+      ['--num_readouts=100',
+       '--model_two={}'.format('target-model/fifty-fifty.pb')
+      ] + cc_flags(state), 'target evaluation', make_slice[-7:])
+  logging.info('Win rate %s vs target: %.3f', state.train_model_name,
+               target_win_rate)
+  return target_win_rate
+
 # Evaluate trained model against Leela.
-def evaluate_target(state):
+def evaluate_target_leela(state):
   leela_cmd = 'external/leela/leela_0110_linux_x64 ' \
               '--gtp --quiet --playouts=2000 --noponder'
   target_win_rate = evaluate(
@@ -160,6 +171,8 @@ def evaluate_target(state):
                target_win_rate)
   return target_win_rate
 
+def evaluate_target(state):
+    return evaluate_target_minigo(state)
 
 class State:
 
