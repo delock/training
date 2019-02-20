@@ -98,7 +98,7 @@ def checked_run(cmd, name, num_instance=0, num_parallel_instance=None,
           subproc_cmd = ' '.join(subproc_cmd)
           subproc_cmd = subproc_cmd.format(cur_instance)
           if (cur_instance == 0):
-            print("subproc_cmd = {}".format(subproc_cmd))
+            logging.debug("subproc_cmd = {}".format(subproc_cmd))
           procs[index] = subprocess.Popen(subproc_cmd, shell=True,
                                           stdout=subprocess.PIPE,
                                           stderr=subprocess.STDOUT)
@@ -107,9 +107,8 @@ def checked_run(cmd, name, num_instance=0, num_parallel_instance=None,
           for i in range(num_parallel_instance):
             if procs[i] != None:
               proc_count += 1
-          print ('started instance {} in proc {}. proc count = {}'.format(
+          logging.debug('started instance {} in proc {}. proc count = {}'.format(
               cur_instance, index, proc_count))
-          sys.stdout.flush()
 
           # change stdout of the process to non-blocking
           # this is for collect output in a single thread
@@ -133,7 +132,7 @@ def checked_run(cmd, name, num_instance=0, num_parallel_instance=None,
             if ret_val == None:
               continue
             elif ret_val != 0:
-              print (results[index])
+              logging.error(results[index])
               raise RuntimeError(
                 'Non-zero return code (%d) executing %s' % (
                     ret_val, subproc_cmd))
@@ -146,9 +145,8 @@ def checked_run(cmd, name, num_instance=0, num_parallel_instance=None,
             for i in range(num_parallel_instance):
               if procs[i] != None:
                 proc_count += 1
-            print ('proc {} finished. proc count = {}'.format(
+            logging.debug('proc {} finished. proc count = {}'.format(
                 index, proc_count))
-            sys.stdout.flush()
       return result.encode('utf-8')
 
 
