@@ -12,16 +12,25 @@ http_archive(
     ],
 )
 
+#http_archive(
+#    name = "org_tensorflow",
+#    sha256 = "107638516b0224d3184253db21a8e938d3ee619eb1ee2667cae6890c9ab101d0",
+#    strip_prefix = "tensorflow-1.12.0",
+#    urls = ["https://github.com/tensorflow/tensorflow/archive/v1.12.0.zip"],
+#)
+
 http_archive(
     name = "org_tensorflow",
-    sha256 = "107638516b0224d3184253db21a8e938d3ee619eb1ee2667cae6890c9ab101d0",
-    strip_prefix = "tensorflow-1.12.0",
-    urls = ["https://github.com/tensorflow/tensorflow/archive/v1.12.0.zip"],
+    sha256 = "34a643843cae1d62dd412ee1f23d7f47ede5f5bfff62fac21cfab6b33d383ce5",
+    strip_prefix = "tensorflow-1.13.0-rc2",
+    urls = ["https://github.com/tensorflow/tensorflow/archive/v1.13.0-rc2.zip"],
 )
 
 http_archive(
     name = "minigo",
-    patches = ["//:minigo.patch"],
+    patches = ["//:minigo.patch", "//:multi-instance.patch"],
+    # mkl.patch is for CPU optimization
+    # patches = ["//:minigo.patch", "//:multi-instance.patch", "//:mkl.patch"],
     sha256 = "1fea682e15541c0b2c4b162a2120d3a8e9beb4fbf83bd876cc05e8409f3b3d61",
     strip_prefix = "minigo-fda1487dff94a710e9359f80c28d08d99d6c3e3c",
     urls = ["https://github.com/tensorflow/minigo/archive/fda1487dff94a710e9359f80c28d08d99d6c3e3c.zip"]

@@ -1,0 +1,48 @@
+diff --git cc/main.cc cc/main.cc
+index a3beeb0..0688fe4 100644
+--- cc/main.cc
++++ cc/main.cc
+@@ -126,6 +126,7 @@ DEFINE_string(gtp_client, "",
+               "'/usr/games/gnugo --mode gtp'. Exactly one of model_two and "
+               "gtp_client needs to be specified in eval mode.");
+ DEFINE_int32(parallel_games, 32, "Number of games to play in parallel.");
++DEFINE_int32(instance_id, 0, "Unique id with multi-instance.");
+ 
+ // Output flags.
+ DEFINE_string(output_dir, "",
+@@ -346,7 +347,9 @@ class SelfPlayer {
+       absl::MutexLock lock(&mutex_);
+       dual_net_factory_ = NewDualNetFactory(FLAGS_model, FLAGS_parallel_games);
+     }
+-    for (int i = 0; i < FLAGS_parallel_games; ++i) {
++    int instance_id = FLAGS_instance_id;
++    for (int i = instance_id*FLAGS_parallel_games;
++             i < (instance_id+1)*FLAGS_parallel_games; ++i) {
+       threads_.emplace_back(std::bind(&SelfPlayer::ThreadRun, this, i));
+     }
+     for (auto& t : threads_) {
+@@ -610,8 +613,10 @@ class PairEvaluator {
+ 
+     int num_games = FLAGS_parallel_games;
+     barrier_ = absl::make_unique<Barrier>(num_games);
++    int instance_id = FLAGS_instance_id;
+ 
+-    for (int thread_id = 0; thread_id < num_games; ++thread_id) {
++    for (int thread_id = instance_id*num_games;
++             thread_id < (instance_id+1)*num_games; ++thread_id) {
+       bool swap_models = (thread_id & 1) != 0;
+       threads_.emplace_back(std::bind(&PairEvaluator::ThreadRun, this,
+                                       thread_id, cur_model.get(),
+@@ -853,7 +858,11 @@ class GtpEvaluator {
+     auto* white_results = &gtp_results;
+ 
+     std::vector<std::thread> threads;
+-    for (int thread_id = 0; thread_id < FLAGS_parallel_games; ++thread_id) {
++    int num_games = FLAGS_parallel_games;
++    int instance_id = FLAGS_instance_id;
++
++    for (int thread_id = instance_id*num_games;
++             thread_id < (instance_id+1)*num_games; ++thread_id) {
+       threads.emplace_back(std::bind(&GtpEvaluator::ThreadRun, this, thread_id,
+                                      black_results, white_results,
+                                      &gtp_results == black_results));
